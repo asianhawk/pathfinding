@@ -14,10 +14,10 @@ local m = pf.new {
 	wall = {
 		"......FFFF",
 		"...IIIF...",
-		"......A...",
 		"......D...",
 		"......E...",
-		"......DCBA",
+		"......F...",
+		"......GCBA",
 	}
 }
 
@@ -27,6 +27,9 @@ for i = 0, height * 2 + 1 do
 	for j = 0, width * 2 + 1 do
 		local w = pf.block(m, j, i)
 		if w > 0 then
+			if w < 255 then
+				w = w * 9
+			end
 			local a = string.format("%02X", 255 - w)
 			c:rect(grid * j , grid * i, grid-1, grid-1, "#" .. a .. "FF" .. a)
 		end

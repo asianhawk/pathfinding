@@ -6,7 +6,6 @@
 
 #define SEARCH_DEPTH 1024
 #define BLOCK_WEIGHT 255
-#define WALL_WEIGHT 9
 
 struct map {
 	int width;
@@ -83,7 +82,7 @@ addwall(lua_State *L, struct map *m, int line, const char *wall, size_t width) {
 		}
 		char c = wall[i];
 		if (c >= 'A' && c<='Z') {
-			int weight = (c - 'A' + 1) * WALL_WEIGHT;
+			int weight = (c - 'A' + 1);
 			int v = 0;
 			v |= map_set(m, x, y, weight);
 			if (i > 0) {
@@ -326,7 +325,7 @@ path_finding(struct map *m, struct path *P, int start_x, int start_y, int end_x,
 				continue;
 			if (in_closed(&ctx, x , y))
 				continue;
-			int tentative_gscore = pn->gscore + off[i].distance * weight / 8;
+			int tentative_gscore = pn->gscore + off[i].distance + off[i].distance * weight;
 			struct pathnode * neighbor = find_open(&ctx, x, y);
 			if (neighbor) {
 				if (tentative_gscore < neighbor->gscore) {
