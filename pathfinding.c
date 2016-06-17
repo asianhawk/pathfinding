@@ -546,15 +546,16 @@ queue_exist(struct route_queue *q, int x, int y) {
 }
 
 static void
-init_route(struct map *m, int *route, struct route_queue *q) {
+init_route(struct map * block, struct map *m, int *route, struct route_queue *q) {
 	int width = m->width;
 	int height = m->height;
 	int i,j;
 	for (i=0;i<height;i++) {
 		for (j=0;j<height;j++) {
 			int w = m->m[i * width + j];
-			route[i * width + j] = w;
-			if (w) {
+			int b = block->m[i * width + j];
+			if (w && b != BLOCK_WEIGHT) {
+				route[i * width + j] = w + b * 5;
 				enter_queue(q, j, i);
 			}
 		}
@@ -574,7 +575,7 @@ gen_route(struct map *m, int *route, struct route_queue *q) {
 		for (i=0;i<8;i++) {
 			int x = c->x + OFF[i].dx;
 			int y = c->y + OFF[i].dy;
-			int dis = odis + OFF[i].distance * (1 + weight);
+			int dis = odis + OFF[i].distance +  m->m[y * width + x] * 5;
 			int w = route[y * width + x];
 			if (w == 0) {
 				route[y * width + x] = dis;
@@ -650,7 +651,7 @@ lflowgraph(lua_State *L) {
 	lua_pop(L, 1);
 	int *route = malloc(width * height * sizeof(int));
 	struct route_queue *q = create_queue(width * height);
-	init_route(result, route, q);
+	init_route(m, result, route, q);
 	gen_route(m, route, q);
 	convert_route(route, result);
 	free(route);
