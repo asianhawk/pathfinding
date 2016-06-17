@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #define SEARCH_DEPTH 1024
 #define BLOCK_WEIGHT 255
@@ -25,6 +26,18 @@ struct path {
 	int depth;
 	int *set;
 	struct pathnode *n;
+};
+
+struct route_coord {
+	int x;
+	int y;
+};
+
+struct route_queue {
+	int head;
+	int tail;
+	int n;
+	struct route_coord q[0];
 };
 
 static inline int
@@ -112,9 +125,6 @@ lnewmap(lua_State *L) {
 	int height = getfield(L, 0, "height");
 	width = width * 2 + 2;
 	height = height * 2 + 2;
-	lua_len(L, 1);
-	int n = luaL_checkinteger(L, -1);
-	lua_pop(L, 1);
 	struct map *m = lua_newuserdata(L, sizeof(struct map) + width * height * sizeof(m->m[0]));
 	m->width = width;
 	m->height = height;
@@ -128,16 +138,16 @@ lnewmap(lua_State *L) {
 		map_set(m, 0, i, BLOCK_WEIGHT);
 		map_set(m, width-1, i, BLOCK_WEIGHT);
 	}
-	for (i=1;i<=n;i++) {
-		if (lua_geti(L, 1, i) != LUA_TTABLE) {
-			return luaL_error(L, "Invalid table index = %d", i);
-		}
+	i = 1;
+	while (lua_geti(L, 1, i) == LUA_TTABLE) {
 		int x = getfield(L, i, "x");
 		int y = getfield(L, i, "y");
 		int size = getfield(L, i, "size");
 		lua_pop(L, 1);
 		addbuilding(L, m, x, y, size);
+		++i;
 	}
+	lua_pop(L, 1);
 	if (lua_getfield(L, 1, "wall") == LUA_TTABLE) {
 		int i = 1;
 		while (lua_geti(L, -1, i) == LUA_TSTRING) {
@@ -286,6 +296,21 @@ nearest(struct path *P, int from, int to) {
 	return ret;
 }
 
+static struct {
+	int dx;
+	int dy;
+	int distance;
+} OFF[8] = {
+	{ -1, -1, 7 },	// up-left
+	{  0, -1, 5 },	// up
+	{  1, -1, 7 },	// up-right
+	{  1,  0, 5 },	// right
+	{  1,  1, 7 },	// bottom-right
+	{  0,  1, 5 },	// bottom
+	{  -1, 1, 7 },	// bottom-left
+	{  -1, 0, 5 },	// left
+};
+
 static int
 path_finding(struct map *m, struct path *P, int start_x, int start_y, int end_x, int end_y) {
 	struct context ctx;
@@ -303,29 +328,15 @@ path_finding(struct map *m, struct path *P, int start_x, int start_y, int end_x,
 			return current;
 		add_closed(&ctx, current);
 		int i;
-		static struct {
-			int dx;
-			int dy;
-			int distance;
-		} off[8] = {
-			{ -1, -1, 7 },	// up-left
-			{  0, -1, 5 },	// up
-			{  1, -1, 7 },	// up-right
-			{  1,  0, 5 },	// right
-			{  1,  1, 7 },	// bottom-right
-			{  0,  1, 5 },	// bottom
-			{  -1, 1, 7 },	// bottom-left
-			{  -1, 0, 5 },	// left
-		};
 		for (i=0;i<8;i++) {
-			int x = pn->x + off[i].dx;
-			int y = pn->y + off[i].dy;
+			int x = pn->x + OFF[i].dx;
+			int y = pn->y + OFF[i].dy;
 			int weight = map_get(m, x, y);
 			if (weight == BLOCK_WEIGHT)
 				continue;
 			if (in_closed(&ctx, x , y))
 				continue;
-			int tentative_gscore = pn->gscore + off[i].distance + off[i].distance * weight;
+			int tentative_gscore = pn->gscore + OFF[i].distance + OFF[i].distance * weight;
 			struct pathnode * neighbor = find_open(&ctx, x, y);
 			if (neighbor) {
 				if (tentative_gscore < neighbor->gscore) {
@@ -421,6 +432,233 @@ lpath(lua_State *L) {
 	return n * 2;
 }
 
+struct map *
+new_flowgraph(lua_State *L, struct map *m, int index) {
+	if (lua_type(L, index) == LUA_TUSERDATA) {
+		struct map * result = lua_touserdata(L, index);
+		if (m->width == result->width && m->height == result->height) {
+			return result;
+		}
+		lua_settop(L, index - 1);
+	}
+	struct map * result = lua_newuserdata(L, sizeof(struct map) + m->width * m->height * sizeof(m->m[0]));
+	result->width = m->width;
+	result->height = m->height;
+	return result;
+}
+
+static inline void
+target_init(struct map *m, int x, int y) {
+	if (x < 0 || x >= m->width || y < 0 || y >=m->height)
+		return;
+	m->m[y * m->width + x] = 1;
+}
+
+static void
+addtarget(lua_State *L, struct map *m, int x, int y, int size, int radius) {
+	int i,j;
+	radius += 1;
+	int limit = radius * 2 + 1;
+	limit *= limit;
+
+	x = x * 2 + 1;
+	y = y * 2 + 1;
+	size = size * 2 - 1;
+	for (i=1;i<=radius;i++) {
+		for (j=1;j<=radius;j++) {
+			int dist = (i*i+j*j) * 4;
+			if (dist <= limit) {
+				target_init(m, x-j, y-i);	// left-top
+				target_init(m, x+size-1+j, y-i);	// right-top
+				target_init(m, x-j, y+size-1+i);	// left-bottom
+				target_init(m, x+size-1+j, y+size-1+i);	// right-bottom
+			}
+		}
+	}
+	for (i=y-radius;i<y+size+radius;i++) {
+		if (i<0)
+			continue;
+		if (i>=m->height)
+			break;
+		for (j=x;j<x+size;j++) {
+			if (j<0)
+				continue;
+			if (j>=m->width)
+				break;
+			m->m[i * m->width + j] = 1;
+		}
+	}
+	for (i=y;i<y+size;i++) {
+		if (i<0)
+			continue;
+		if (i>=m->height)
+			break;
+		for (j=0;j<radius;j++) {
+			target_init(m, x - j - 1, i);
+			target_init(m, x + size + j , i);
+		}
+	}
+}
+
+static struct route_queue *
+create_queue(int n) {
+	struct route_queue * q = malloc(sizeof(struct route_queue) + sizeof(q->q[0]) * n);
+	q->head = 0;
+	q->tail = 0;
+	q->n = n;
+	return q;
+}
+
+static void
+enter_queue(struct route_queue *q, int x, int y) {
+	struct route_coord *c = &q->q[q->tail];
+	c->x = x;
+	c->y = y;
+	++q->tail;
+	if (q->tail >= q->n)
+		q->tail = 0;
+	assert(q->head != q->tail);
+}
+
+static struct route_coord *
+leave_queue(struct route_queue *q) {
+	if (q->head == q->tail)
+		return NULL;
+	struct route_coord * c = &q->q[q->head];
+	++q->head;
+	if (q->head >= q->n)
+		q->head = 0;
+	return c;
+}
+
+static int
+queue_exist(struct route_queue *q, int x, int y) {
+	int head = q->head;
+	while (head != q->tail) {
+		struct route_coord * c = &q->q[head];
+		if (c->x == x && c->y == y)
+			return 1;
+		++head;
+		if (head > q->n)
+			head = 0;
+	}
+	return 0;
+}
+
+static void
+init_route(struct map *m, int *route, struct route_queue *q) {
+	int width = m->width;
+	int height = m->height;
+	int i,j;
+	for (i=0;i<height;i++) {
+		for (j=0;j<height;j++) {
+			int w = m->m[i * width + j];
+			route[i * width + j] = w;
+			if (w) {
+				enter_queue(q, j, i);
+			}
+		}
+	}
+}
+
+static void
+gen_route(struct map *m, int *route, struct route_queue *q) {
+	struct route_coord *c = NULL;
+	int width = m->width;
+	while ((c=leave_queue(q))) {
+		int weight = m->m[c->y * width + c->x];
+		if (weight == BLOCK_WEIGHT)
+			continue;
+		int i;
+		int odis = route[c->y * width + c->x];
+		for (i=0;i<8;i++) {
+			int x = c->x + OFF[i].dx;
+			int y = c->y + OFF[i].dy;
+			int dis = odis + OFF[i].distance * (1 + weight);
+			int w = route[y * width + x];
+			if (w == 0) {
+				route[y * width + x] = dis;
+				enter_queue(q, x, y);
+			} else {
+				if (w > dis) {
+					route[y * width + x] = dis;
+					if (!queue_exist(q, x, y)) {
+						enter_queue(q, x, y);
+					}
+				}
+			}
+		}
+	}
+}
+
+static void
+convert_route(int *route, struct map *m) {
+	int width = m->width;
+	int height = m->height;
+	int i,j;
+	for (i=0;i<height;i++) {
+		for (j=0;j<width;j++) {
+			int w = route[i*width+j];
+			int min_id = 0;
+			if (w > 1) {
+				int k;
+				int min = w;
+				for (k=0;k<8;k++) {
+					int x = j + OFF[k].dx;
+					int y = i + OFF[k].dy;
+					int weight = route[y*width+x];
+					if (weight > 0 && weight < min) {
+						min = weight;
+						min_id = k + 1;
+					}
+				}
+			}
+			m->m[i*width+j] = min_id;
+		}
+	}
+}
+
+/*
+	userdata buildingmap
+	table target {
+		{ x = , y = , size = , radius = },
+		...
+	}
+	userdata flowmap (optinal: result)
+
+	return userdata flowmap
+ */
+static int
+lflowgraph(lua_State *L) {
+	luaL_checktype(L,1, LUA_TUSERDATA);
+	struct map * m = lua_touserdata(L, 1);
+	luaL_checktype(L,2, LUA_TTABLE);
+	struct map * result = new_flowgraph(L, m, 3);
+	int width = m->width;
+	int height = m->height;
+	memset(result->m, 0, width * height * sizeof(result->m[0]));
+	int i = 1;
+	while(lua_geti(L, 2, i) == LUA_TTABLE) {
+		int x = getfield(L, i, "x");
+		int y = getfield(L, i, "y");
+		int size = getfield(L, i, "size");
+		int radius = getfield(L, i, "radius");
+		addtarget(L, result, x, y, size, radius);
+		lua_pop(L, 1);
+		++i;
+	}
+	lua_pop(L, 1);
+	int *route = malloc(width * height * sizeof(int));
+	struct route_queue *q = create_queue(width * height);
+	init_route(result, route, q);
+	gen_route(m, route, q);
+	convert_route(route, result);
+	free(route);
+	free(q);
+
+	return 1;
+}
+
 int
 luaopen_pathfinding(lua_State *L) {
 	luaL_checkversion(L);
@@ -428,6 +666,7 @@ luaopen_pathfinding(lua_State *L) {
 		{ "new", lnewmap },
 		{ "block", lblock },
 		{ "path", lpath },
+		{ "flowgraph", lflowgraph },
 		{ NULL, NULL },
 	};
 	luaL_newlib(L,l);
