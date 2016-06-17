@@ -16,9 +16,6 @@ $CONTENT
 </html>
 ]]
 
---ctx.fillStyle='#FF0000';
---ctx.fillRect(0,0,80,100);
-
 function canvas.new()
 	return setmetatable({} , canvas)
 end
@@ -42,7 +39,10 @@ function canvas:line(x1,y1,x2,y2)
 })))
 end
 
-function canvas:rect(x,y,w,h)
+function canvas:rect(x,y,w,h,c)
+	if c then
+		table.insert(self, "ctx.fillStyle = '" .. c .. "';")
+	end
 	table.insert(self, string.format("ctx.fillRect(%d,%d,%d,%d);",x,y,w,h))
 end
 

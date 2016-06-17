@@ -5,14 +5,8 @@
 #include <stdlib.h>
 
 #define SEARCH_DEPTH 1024
-
-/*
-   0  1  2 
-    \ | /
-  7 -   - 3
-    / | \
-   6  5  4
- */
+#define BLOCK_WEIGHT 255
+#define WALL_WEIGHT 9
 
 struct map {
 	int width;
@@ -34,38 +28,35 @@ struct path {
 	struct pathnode *n;
 };
 
+static inline int
+map_set(struct map *m, int x, int y, int w) {
+	int v = m->m[y * m->width + x];
+	m->m[y * m->width + x] = w;
+	return v;
+}
+
+static inline int
+map_get(struct map *m, int x, int y) {
+	return m->m[y * m->width + x];
+}
+
 static void
 addbuilding(lua_State *L, struct map *m, int x, int y, int size) {
-	if (x < 0 || x + size > m->width ||
-		y < 0 || y + size > m->height) {
-		luaL_error(L, "building (%d,%d,%d) is out of map", x,y,size);
+	x = x * 2 + 1;
+	y = y * 2 + 1;
+	size = size * 2 - 1;
+	if (x < 0 || x + size >= m->width ||
+		y < 0 || y + size >= m->height) {
+		luaL_error(L, "building (%d,%d,%d) is out of map", (x-2)/2,(y-2)/2,(size+1)/2);
 	}
-#define M(bit) (1<<bit)
-#define SET(xx,yy,bits) { \
-	uint8_t * b = &m->m[(y+yy)*(m->width+1) + (x+xx)];\
-	uint8_t mask = bits; \
-	if ((*b & mask) != 0) { \
-		luaL_error(L, "Can't add building (%d,%d,%d)", x,y,size); \
-	} else {	\
-		*b |= mask;	\
-	}	\
-}
 	int i,j;
-	SET(0,   0, M(4))	// up-left
-	SET(size,0, M(6))	// up-right
-	SET(0,size, M(2))	// bottom-left
-	SET(size,size, M(0))	// bottom-right
-	for (i=1;i<size;i++) {
-		SET(i,0, M(6) | M(5) | M(4))		// up
-		SET(i, size, M(0) | M(1) | M(2))	// bottom
-		SET(0, i, M(2) | M(3) | M(4))		// left
-		SET(size, i, M(0) | M(7) | M(6))	// right
-		for (j=1;j<size;j++) {
-			SET(i,j, 0xff)	// center
+	for (i=0;i<size;i++) {
+		for (j=0;j<size;j++) {
+			if (map_set(m, j + x, i + y, BLOCK_WEIGHT) != 0) {
+				luaL_error(L, "Can't add building (%d,%d,%d)", (x-2)/2,(y-2)/2,(size+1)/2);
+			}
 		}
 	}
-#undef M
-#undef SET
 }
 
 static int
@@ -78,36 +69,66 @@ getfield(lua_State *L, int index, const char *f) {
 	return v;
 }
 
+static void
+addwall(lua_State *L, struct map *m, int line, const char *wall, size_t width) {
+	int y = line * 2 + 1;
+	int i;
+	if (y >= m->height - 1) {
+		luaL_error(L, "add wall (y = %d) fail", y);
+	}
+	for (i=0;i<width;i++) {
+		int x = i * 2 + 1;
+		if (x >= m->width -1) {
+			luaL_error(L, "add wall (%d, %d) fail", x, y);
+		}
+		char c = wall[i];
+		if (c >= 'A' && c<='Z') {
+			int weight = (c - 'A' + 1) * WALL_WEIGHT;
+			int v = 0;
+			v |= map_set(m, x, y, weight);
+			if (i > 0) {
+				int w = map_get(m, x - 2, y);
+				if (w != 0 && w != BLOCK_WEIGHT) {
+					v |= map_set(m, x-1, y, weight);
+				}
+			}
+			if (y > 0) {
+				int w = map_get(m, x , y - 2);
+				if (w != 0 && w != BLOCK_WEIGHT) {
+					v |= map_set(m, x, y-1, weight);
+				}
+			}
+			if (v != 0) {
+				luaL_error(L, "add wall (%d, %d) fail", x, y);
+			}
+		}
+	}
+}
+
 static int
 lnewmap(lua_State *L) {
 	luaL_checktype(L, 1, LUA_TTABLE);
 	lua_settop(L, 1);
 	int width = getfield(L, 0, "width");
 	int height = getfield(L, 0, "height");
+	width = width * 2 + 2;
+	height = height * 2 + 2;
 	lua_len(L, 1);
 	int n = luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
-	struct map *m = lua_newuserdata(L, sizeof(struct map) + (width+1) * (height+1) * sizeof(m->m[0]));
+	struct map *m = lua_newuserdata(L, sizeof(struct map) + width * height * sizeof(m->m[0]));
 	m->width = width;
 	m->height = height;
-	memset(m->m, 0, (width+1) * (height+1) * sizeof(m->m[0]));
+	memset(m->m, 0, width * height * sizeof(m->m[0]));
 	int i;
-#define M(bit) (1<<bit)
-#define SET(xx,yy,bits) { m->m[yy * (width+1) + xx] = bits; }
-	SET(0,0, M(2) | M(1) | M(0) | M(7) | M(6))	// up-left
-	SET(width,0, M(0) | M(1) | M(2) | M(3) | M(4))	// up-right
-	SET(0, height, M(0) | M(7) | M(6) | M(5) | M(4))	//  bottom-left
-	SET(width,height, M(2) | M(3) | M(4) | M(5) | M(6))	// bottom-right
-	for (i=1;i<width;i++) {
-		SET(i,0, M(0) | M(1) | M(2))	// up
-		SET(i,height, M(4) | M(5) | M(6))	// bottom
+	for (i=0;i<width;i++) {
+		map_set(m, i, 0, BLOCK_WEIGHT);
+		map_set(m, i, height-1, BLOCK_WEIGHT);
 	}
-	for (i=1;i<height;i++) {
-		SET(0,i, M(0) | M(7) | M(6))	// left
-		SET(width,i, M(2) | M(3) | M(4))	// bottom
+	for (i=1;i<height-1;i++) {
+		map_set(m, 0, i, BLOCK_WEIGHT);
+		map_set(m, width-1, i, BLOCK_WEIGHT);
 	}
-#undef M
-#undef SET
 	for (i=1;i<=n;i++) {
 		if (lua_geti(L, 1, i) != LUA_TTABLE) {
 			return luaL_error(L, "Invalid table index = %d", i);
@@ -118,9 +139,28 @@ lnewmap(lua_State *L) {
 		lua_pop(L, 1);
 		addbuilding(L, m, x, y, size);
 	}
-
+	if (lua_getfield(L, 1, "wall") == LUA_TTABLE) {
+		int i = 1;
+		while (lua_geti(L, -1, i) == LUA_TSTRING) {
+			size_t sz;
+			const char * wall = lua_tolstring(L, -1, &sz);
+			addwall(L, m, i-1, wall, sz);
+			lua_pop(L, 1);
+			++i;
+		}
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
 	return 1;
 }
+
+/*
+   0  1  2 
+    \ | /
+  7 -   - 3
+    / | \
+   6  5  4
+*/
 
 static int
 lblock(lua_State *L) {
@@ -128,17 +168,13 @@ lblock(lua_State *L) {
 	struct map *m = lua_touserdata(L, 1);
 	int x = luaL_checkinteger(L, 2);
 	int y = luaL_checkinteger(L, 3);
-	if (x < 0 || x > m->width ||
-		y < 0 || y > m->height) {
+	if (x < 0 || x >= m->width ||
+		y < 0 || y >= m->height) {
 		luaL_error(L, "Position (%d,%d) is out of map", x,y);
 	}
-	uint8_t bits = m->m[y * (m->width+1) + x];
-	int i;
-	for (i=0;i<8;i++) {
-		lua_pushboolean(L, bits & (1<<i));
-	}
+	lua_pushinteger(L, map_get(m, x, y));
 
-	return 8;
+	return 1;
 }
 
 static inline int
@@ -267,7 +303,6 @@ path_finding(struct map *m, struct path *P, int start_x, int start_y, int end_x,
 		if (pn->x == end_x && pn->y == end_y)
 			return current;
 		add_closed(&ctx, current);
-		uint8_t bits = m->m[pn->y * (m->width+1) + pn->x];
 		int i;
 		static struct {
 			int dx;
@@ -284,13 +319,14 @@ path_finding(struct map *m, struct path *P, int start_x, int start_y, int end_x,
 			{  -1, 0, 5 },	// left
 		};
 		for (i=0;i<8;i++) {
-			if (bits & (1<<i))
-				continue;
 			int x = pn->x + off[i].dx;
 			int y = pn->y + off[i].dy;
+			int weight = map_get(m, x, y);
+			if (weight == BLOCK_WEIGHT)
+				continue;
 			if (in_closed(&ctx, x , y))
 				continue;
-			int tentative_gscore = pn->gscore + off[i].distance;
+			int tentative_gscore = pn->gscore + off[i].distance * weight / 8;
 			struct pathnode * neighbor = find_open(&ctx, x, y);
 			if (neighbor) {
 				if (tentative_gscore < neighbor->gscore) {
@@ -321,8 +357,8 @@ close_path(struct path *P) {
 
 static void
 check_position(lua_State *L, struct map *m, int x, int y) {
-	if (x < 0 || x > m->width ||
-		y < 0 || y > m->height) {
+	if (x < 0 || x >= m->width ||
+		y < 0 || y >= m->height) {
 		luaL_error(L, "Invalid position (%d,%d)", x,y);
 	}
 }
