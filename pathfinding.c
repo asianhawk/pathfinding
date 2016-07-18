@@ -500,6 +500,27 @@ addtarget(lua_State *L, struct map *m, int x, int y, int size, int radius) {
 	}
 }
 
+static void
+addtarget_map(lua_State *L, struct map *m, const char * target, char mark) {
+	int x=0,y=0;
+	int i;
+	char c;
+	for (i=0;(c=target[i]);i++,x++) {
+		if (c == '\n') {
+			++y;
+			if (y >= m->height)
+				break;
+			x=0;
+			continue;
+		}
+		if (c == '\r')
+			continue;
+		if (c == mark && x < m->width) {
+			m->m[y * m->width + x] = 1;
+		}
+	}
+}
+
 static struct route_queue *
 create_queue(int n) {
 	struct route_queue * q = malloc(sizeof(struct route_queue) + sizeof(q->q[0]) * n);
@@ -551,7 +572,7 @@ init_route(struct map * block, struct map *m, int *route, struct route_queue *q)
 	int height = m->height;
 	int i,j;
 	for (i=0;i<height;i++) {
-		for (j=0;j<height;j++) {
+		for (j=0;j<width;j++) {
 			int w = m->m[i * width + j];
 			int b = block->m[i * width + j];
 			if (w && b != BLOCK_WEIGHT) {
@@ -624,6 +645,9 @@ convert_route(int *route, struct map *m) {
 	table target {
 		{ x = , y = , size = , radius = },
 		...
+	} or table target {
+		string map
+		string mark
 	}
 	userdata flowmap (optinal: result)
 
@@ -649,7 +673,20 @@ lflowgraph(lua_State *L) {
 		++i;
 	}
 	lua_pop(L, 1);
+	if (lua_geti(L, 2, i) == LUA_TSTRING) {
+		const char * target_map = lua_tostring(L, -1);
+		lua_pop(L, 1);	// the string is in the table
+		if (lua_geti(L, 2, i+1) != LUA_TSTRING) {
+			return luaL_error(L, "Invalid target map");
+		}
+		const char * mark = lua_tostring(L, -1);
+		lua_pop(L, 1);
+		addtarget_map(L, result, target_map, mark[0]);
+	} else {
+		lua_pop(L, 1);
+	}
 	int *route = malloc(width * height * sizeof(int));
+	memset(route, 0, width * height*sizeof(int));
 	struct route_queue *q = create_queue(width * height);
 	init_route(m, result, route, q);
 	gen_route(m, route, q);
