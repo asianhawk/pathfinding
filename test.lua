@@ -8,10 +8,7 @@ local grid = 30
 local m = pf.new {
 	width = width,
 	height = height,
-	{ x=1,y=1,size=2 },
-	{ x=3,y=2,size=3 },
-	{ x=7,y=1,size=3 },
-	wall = {
+	obstacle = {
 		"......FFFF",
 		"...IIIF...",
 		"......D...",
@@ -23,8 +20,8 @@ local m = pf.new {
 
 local c = canvas.new()
 
-for i = 0, height * 2 + 1 do
-	for j = 0, width * 2 + 1 do
+for i = 0, height-1 do
+	for j = 0, width-1 do
 		local w = pf.block(m, j, i)
 		if w > 0 then
 			if w < 255 then
@@ -43,17 +40,20 @@ local function draw_wp(c, x, y)
 	c:line(xx + 4,yy - 4, xx-4, yy+4)
 end
 
-local path = { pf.path(m, 1, 4, 15, 9) }
+local path = { pf.path(m, 0, 0, 9, 9) }
 
 for i=1,#path,2 do
 	c:rect(path[i] * grid + 10, path[i+1] * grid + 10, 5, 5, "#0000ff")
 end
 
-local graph = pf.flowgraph(m, {
-	{ x=1,y=1,size=2,radius=0 },
-	{ x=3,y=2,size=3,radius=0 },
-	{ x=7,y=1,size=3,radius=0 },
-})
+local graph = pf.flowgraph(m,{
+[[aaaaaa    
+aaa    ddd
+bbbbbb ddd
+bbbbbb ddd
+cccccc ddd
+cccccc    ]],"a"}
+)
 
 local off = {
 	{ -1, -1 },
@@ -77,8 +77,8 @@ local function draw_arrow(x,y,idx)
 	c:line(x, y, x + t[1] * 5, y+ t[2] * 5)
 end
 
-for i = 0, height * 2 + 1 do
-	for j = 0, width * 2 + 1 do
+for i = 0, height - 1 do
+	for j = 0, width - 1 do
 		local w = pf.block(graph, j, i)
 		draw_arrow(j,i,w)
 	end
